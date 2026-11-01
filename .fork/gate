@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# dsh fork gate: the relevant upstream CI checks on this host.
+# Run from the fork root. Dependencies must already be installed.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+pnpm run lint
+pnpm run typecheck
+pnpm exec vitest run --coverage --coverage.include='packages/acp/acp/src/**' packages/acp/acp/tests
+
+# The ACP replay starts the source CLI under this host's Node. nixpkgs'
+# deepseek-harness package applies expose-internals-profile-resolution.patch;
+# the source checkout needs the same patch for the snapshot subprocess.
+nixpkgs_unstable="$(
+  nix eval --raw --impure --expr '(builtins.getFlake (toString ~/nixos)).inputs.nixpkgs-unstable.outPath'
+)"
+expose_patch="$nixpkgs_unstable/pkgs/by-name/de/deepseek-harness/expose-internals-profile-resolution.patch"
+if ! git apply --check -R "$expose_patch" >/dev/null 2>&1; then
+  echo "gate: $expose_patch is not applied to this checkout." >&2
+  echo "gate: apply it before the ACP snapshot replay (the nix build applies it automatically)." >&2
+  exit 1
+fi
+
+# The snapshot launcher spawns source dsh without the nix wrapper's
+# --expose-internals. Add it for this replay only, then restore the file.
+launcher=packages/test-support/loader-smoke/src/index.ts
+launcher_backup="$(mktemp)"
+cp "$launcher" "$launcher_backup"
+restore_launcher() {
+  cp "$launcher_backup" "$launcher"
+  rm -f "$launcher_backup"
+}
+trap restore_launcher EXIT
+perl -0pi -e "s/args: \\['--import'/args: ['--expose-internals', '--import'/; s/args: \\[options\\.libBin/args: ['--expose-internals', options.libBin/" "$launcher"
+pnpm exec vitest run --config vitest.snapshot.config.ts snapshots/acp/acp.snapshot.ts
+restore_launcher
+trap - EXIT
+
+pnpm run build:artifacts
+pnpm run build:check
+
+# The fork-only docs pin upstream commits by pattern design, which upstream's
+# verify-repository-references rejects. Accept only that recorded deviation.
+docs_log="$(mktemp)"
+if pnpm run test:docs >"$docs_log" 2>&1; then
+  echo "gate: test:docs passed"
+else
+  if ! grep -q '^== FAILED ' "$docs_log" ||
+     grep '^== FAILED ' "$docs_log" | grep -qv 'repository references'; then
+    cat "$docs_log" >&2
+    echo "gate: test:docs failed outside the recorded repository-reference deviation" >&2
+    exit 1
+  fi
+  refs_output="$(pnpm run verify-repository-references 2>&1)" && refs_exit=0 || refs_exit=$?
+  printf '%s\n' "$refs_output" >&2
+  if (( refs_exit == 0 )); then
+    echo "gate: repository references passed but test:docs failed" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$refs_output" |
+     grep -E '^  [^:]+:[0-9]+ (commit-hash|organization-url)$' |
+     grep -vE '^  (FORK\.md|\.claude/rules/(upstream-practice|fork)\.md|python/sdk/uv\.lock):[0-9]+ commit-hash$' |
+     grep -q .; then
+    echo "gate: repository-reference finding outside the recorded deviation" >&2
+    exit 1
+  fi
+  echo "gate: test:docs passed except the recorded repository-reference deviation"
+fi
+rm -f "$docs_log"

@@ -6,4 +6,4 @@
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"{{sessionId}}","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_00_d0sAHpJ9mYOJi0z7KNy30441","status":"completed","content":[{"type":"content","content":{"type":"text","text":"escalated\n"}}]}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"{{sessionId}}","update":{"sessionUpdate":"agent_thought_chunk","messageId":"{{messageId}}","content":{"type":"text","text":"The command succeeded — it wrote the file, read it back (output \"escalated\"), and removed it. The user asked me to reply with the single word DONE after the result."}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"{{sessionId}}","update":{"sessionUpdate":"agent_message_chunk","messageId":"{{messageId}}","content":{"type":"text","text":"DONE"}}}}
-{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"totalTokens":3408,"inputTokens":1528,"outputTokens":216,"cachedReadTokens":1664,"cachedWriteTokens":0}}}

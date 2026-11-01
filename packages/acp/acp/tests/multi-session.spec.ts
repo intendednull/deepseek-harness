@@ -49,9 +49,9 @@ describe('ACP multi-session isolation', () => {
     const pendingA = harness.client.prompt({ sessionId: a, prompt: [{ type: 'text', text: 'hang A' }] })
     await vi.waitFor(() => { expect(harness!.ctx.agents.get(SessionId(a))?.status).toBe('running') })
     await harness.client.cancel({ sessionId: a })
-    await expect(pendingA).resolves.toEqual({ stopReason: 'cancelled' })
+    await expect(pendingA).resolves.toMatchObject({ stopReason: 'cancelled' })
     await expect(harness.client.prompt({ sessionId: b, prompt: [{ type: 'text', text: 'go B' }] }))
-      .resolves.toEqual({ stopReason: 'end_turn' })
+      .resolves.toMatchObject({ stopReason: 'end_turn' })
     await vi.waitFor(() => { expect(messageTextFor(harness!.sessionUpdates, b)).toBe('B done') })
   })
 
@@ -70,8 +70,8 @@ describe('ACP multi-session isolation', () => {
     await expect(harness.client.prompt({ sessionId: a, prompt: [{ type: 'text', text: 'again' }] }))
       .rejects.toThrow(/already in flight/)
     await Promise.all([harness.client.cancel({ sessionId: a }), harness.client.cancel({ sessionId: b })])
-    await expect(pendingA).resolves.toEqual({ stopReason: 'cancelled' })
-    await expect(pendingB).resolves.toEqual({ stopReason: 'cancelled' })
+    await expect(pendingA).resolves.toMatchObject({ stopReason: 'cancelled' })
+    await expect(pendingB).resolves.toMatchObject({ stopReason: 'cancelled' })
   })
 
   it('drains every live session on bridge disposal', async () => {

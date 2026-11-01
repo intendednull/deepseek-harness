@@ -77,7 +77,7 @@ describe('automation-only ACP bridge', () => {
   })
 
   it('creates a session, emits one committed answer, and settles the prompt', async () => {
-    harness = await makeBridgeHarness({ script: [textResponse('hello there')] })
+    harness = await makeBridgeHarness({ script: [textResponse('hello there'), textResponse('again')] })
     await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
     const { sessionId } = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
     const result = await harness.client.prompt({
@@ -86,6 +86,13 @@ describe('automation-only ACP bridge', () => {
     })
 
     expect(result.stopReason).toBe('end_turn')
+    expect(result.usage).toEqual({
+      totalTokens: 16,
+      inputTokens: 5,
+      outputTokens: 11,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+    })
     await vi.waitFor(() => { expect(harness!.updates.at(-1)?.sessionUpdate).toBe('usage_update') })
     expect(harness.updates[0]).toMatchObject({
       sessionUpdate: 'agent_message_chunk',
@@ -95,6 +102,29 @@ describe('automation-only ACP bridge', () => {
     if ('messageId' in harness.updates[0]!) expect(typeof harness.updates[0].messageId).toBe('string')
     expect(harness.ctx.agents.get(SessionId(sessionId))?.session.header.cwd).toBe(process.cwd())
     expect(harness.adapter.requests[0]?.messages.at(-1)?.content).toEqual([{ type: 'text', text: 'say hello' }])
+
+    const second = await harness.client.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'say again' }],
+    })
+    expect(second.usage).toEqual({
+      totalTokens: 10,
+      inputTokens: 5,
+      outputTokens: 5,
+      cachedReadTokens: 0,
+      cachedWriteTokens: 0,
+    })
+  })
+
+  it('omits prompt usage when the token meter is not mounted', async () => {
+    harness = await makeBridgeHarness({ tokenMeter: false, script: [textResponse('no meter')] })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+    const { sessionId } = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
+
+    await expect(harness.client.prompt({
+      sessionId,
+      prompt: [{ type: 'text', text: 'say hello' }],
+    })).resolves.toMatchObject({ stopReason: 'end_turn' })
   })
 
   it('closes one active session without affecting its neighbor', async () => {
@@ -124,7 +154,7 @@ describe('automation-only ACP bridge', () => {
 
     await harness.client.closeSession({ sessionId: created.sessionId })
 
-    await expect(prompt).resolves.toEqual({ stopReason: 'cancelled' })
+    await expect(prompt).resolves.toMatchObject({ stopReason: 'cancelled' })
     await expect(harness.client.listSessions({})).resolves.toMatchObject({
       sessions: [{ sessionId: created.sessionId, cwd: process.cwd() }],
     })
@@ -501,7 +531,7 @@ describe('automation-only ACP bridge', () => {
       await expect(harness.client.prompt({
         sessionId: created.sessionId,
         prompt: [{ type: 'text', text: 'second' }],
-      })).resolves.toEqual({ stopReason: 'end_turn' })
+      })).resolves.toMatchObject({ stopReason: 'end_turn' })
     } finally {
       await harness?.dispose()
       harness = undefined
@@ -564,7 +594,7 @@ describe('automation-only ACP bridge', () => {
       await expect(harness.client.prompt({
         sessionId: created.sessionId,
         prompt: [{ type: 'text', text: 'continue while discovery is pending' }],
-      })).resolves.toEqual({ stopReason: 'end_turn' })
+      })).resolves.toMatchObject({ stopReason: 'end_turn' })
       await expect(harness.client.closeSession({ sessionId: created.sessionId })).resolves.toEqual({})
     } finally {
       blocked.resolve([])
@@ -694,7 +724,7 @@ describe('automation-only ACP bridge', () => {
       value: plain.value,
     })
     releaseValidation.resolve(undefined)
-    await expect(prompt).resolves.toEqual({ stopReason: 'end_turn' })
+    await expect(prompt).resolves.toMatchObject({ stopReason: 'end_turn' })
 
     expect(harness.adapter.requests[0]).toMatchObject({ provider: 'mock', model: 'mock' })
     harness.attachments!.beforeValidate = undefined
@@ -851,7 +881,7 @@ describe('automation-only ACP bridge', () => {
     await expect(harness.client.prompt({
       sessionId: created.sessionId,
       prompt: [{ type: 'text', text: 'route me' }],
-    })).resolves.toEqual({ stopReason: 'end_turn' })
+    })).resolves.toMatchObject({ stopReason: 'end_turn' })
     expect(harness.adapter.requests[0]).toMatchObject({ provider: 'mock', model: 'mock' })
   })
 
@@ -920,7 +950,7 @@ describe('automation-only ACP bridge', () => {
     expect(harness.attachments?.saved).toEqual([])
 
     await expect(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'retry' }] }))
-      .resolves.toEqual({ stopReason: 'end_turn' })
+      .resolves.toMatchObject({ stopReason: 'end_turn' })
   })
 
   it('reports durable image write failures as internal prompt failures', async () => {

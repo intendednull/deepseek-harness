@@ -156,6 +156,6 @@ describe('ACP automation output boundary', () => {
     const { sessionId } = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
     harness.onSessionUpdateError = () => {}
     await expect(harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] }))
-      .resolves.toEqual({ stopReason: 'end_turn' })
+      .resolves.toMatchObject({ stopReason: 'end_turn' })
   })
 })

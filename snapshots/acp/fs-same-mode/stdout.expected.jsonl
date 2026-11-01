@@ -5,4 +5,4 @@
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"{{sessionId}}","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_00_Fnymmavpr4klMDy4Fdej3227","status":"completed","content":[{"type":"content","content":{"type":"text","text":"<path>{{cwd}}/escalated.md</path>\n<type>file</type>\n<content>\nCreated file\n</content>"}}]}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"{{sessionId}}","update":{"sessionUpdate":"agent_thought_chunk","messageId":"{{messageId}}","content":{"type":"text","text":"The file was created successfully. The user asked me to reply with exactly the single word DONE."}}}}
 {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"{{sessionId}}","update":{"sessionUpdate":"agent_message_chunk","messageId":"{{messageId}}","content":{"type":"text","text":"DONE"}}}}
-{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}
+{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn","usage":{"totalTokens":8101,"inputTokens":3978,"outputTokens":155,"cachedReadTokens":3968,"cachedWriteTokens":0}}}

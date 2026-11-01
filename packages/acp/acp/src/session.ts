@@ -13,6 +13,8 @@ import {
 import type { Agent, AgentHandle, AgentOptions, AgentStatus, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, errorChain, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { type Session, type SessionEvent, type SessionId, type TurnEndReason } from '@deepseek-ai/dsh-session'
+import type {} from '@deepseek-ai/dsh-session-projection'
+import type { TokenUsageProjection } from '@deepseek-ai/dsh-token-meter'
 import { AcpContentError, admitAcpPrompt } from './content.ts'
 import { turnEndToStopReason } from './codec.ts'
 import { mountAcpMcpServers } from './mcp.ts'
@@ -91,6 +93,46 @@ function selectionFor(
         ? {}
         : { reasoningEffort: logged.config.reasoningEffort },
     }
+}
+
+/**
+ * Snapshot the session's cumulative token totals at prompt admission.
+ * @param ctx - ACP plugin context carrying the token-meter projection.
+ * @param session - exact session whose token totals are reported.
+ * @returns the admission snapshot, or undefined when the projection is absent.
+ */
+function promptUsageStart(ctx: Context, session: Session): TokenUsageProjection | undefined {
+  const totals = ctx.get('sessionProjections')?.stateOf(session, 'tokenUsage')?.totals
+  return totals === undefined ? undefined : { ...totals }
+}
+
+/**
+ * Report the token buckets one prompt added since its admission snapshot.
+ * @param ctx - ACP plugin context carrying the token-meter projection.
+ * @param session - exact session whose token totals are reported.
+ * @param start - cumulative totals captured at prompt admission.
+ * @returns this turn's ACP usage, or undefined when the projection is absent.
+ */
+function promptUsage(
+  ctx: Context,
+  session: Session,
+  start: TokenUsageProjection | undefined,
+): PromptResponse['usage'] {
+  if (start === undefined) return undefined
+  const totals = ctx.get('sessionProjections')?.stateOf(session, 'tokenUsage')?.totals
+  /* v8 ignore next -- the projection is registered for the session's lifetime once admission captured it. */
+  if (totals === undefined) return undefined
+  const uncachedInputTokens = totals.uncachedInputTokens - start.uncachedInputTokens
+  const outputTokens = totals.outputTokens - start.outputTokens
+  const cacheReadTokens = totals.cacheReadTokens - start.cacheReadTokens
+  const cacheWriteTokens = totals.cacheWriteTokens - start.cacheWriteTokens
+  return {
+    totalTokens: uncachedInputTokens + cacheReadTokens + cacheWriteTokens + outputTokens,
+    inputTokens: uncachedInputTokens,
+    outputTokens,
+    cachedReadTokens: cacheReadTokens,
+    cachedWriteTokens: cacheWriteTokens,
+  }
 }
 
 /**
@@ -241,7 +283,7 @@ export class AcpSession {
    * @param params - standard ACP prompt request for this session.
    * @param imageEnabled - connection capability advertised at initialization.
    * @param requestSignal - JSON-RPC request cancellation signal.
-   * @returns the correlated standard stop reason after ordered updates drain.
+   * @returns the correlated standard stop reason and this turn's token usage after ordered updates drain.
    */
   async prompt(
     params: PromptRequest,
@@ -270,6 +312,7 @@ export class AcpSession {
       agentError: undefined,
     }
     this.inflight = inflight
+    const usageStart = promptUsageStart(this.ctx, this.agent.session)
     const onRequestAbort = (): void => { this.cancelPrompt('ACP prompt request cancelled') }
     requestSignal?.addEventListener('abort', onRequestAbort, { once: true })
     /* v8 ignore next -- the SDK dispatches a live signal, then notifies abort through its listener. */
@@ -314,7 +357,7 @@ export class AcpSession {
 
       if (inflight.admissionController.signal.aborted) {
         this.settleAfterQuiescence(inflight)
-        return { stopReason: await completion.promise }
+        return this.promptResponse(await completion.promise, usageStart)
       }
       if (admissionFailure !== undefined) {
         this.inflight = undefined
@@ -328,10 +371,21 @@ export class AcpSession {
       }
 
       this.settleAfterQuiescence(inflight)
-      return { stopReason: await completion.promise }
+      return this.promptResponse(await completion.promise, usageStart)
     } finally {
       requestSignal?.removeEventListener('abort', onRequestAbort)
     }
+  }
+
+  /**
+   * Pair one settled stop reason with the tokens this prompt added.
+   * @param stopReason - correlated standard prompt stop reason.
+   * @param usageStart - cumulative token totals captured at admission.
+   * @returns the standard prompt response.
+   */
+  private promptResponse(stopReason: StopReason, usageStart: TokenUsageProjection | undefined): PromptResponse {
+    const usage = promptUsage(this.ctx, this.agent.session, usageStart)
+    return { stopReason, ...usage === undefined ? {} : { usage } }
   }
 
   /** Cancel the active prompt, or autonomous work when no ACP prompt exists. */

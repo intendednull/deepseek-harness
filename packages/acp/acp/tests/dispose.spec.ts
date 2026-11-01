@@ -26,7 +26,7 @@ describe('ACP connection ownership', () => {
     await vi.waitFor(() => { expect(agent.status).toBe('running') })
 
     await harness.acpFiber.dispose()
-    await expect(prompt).resolves.toEqual({ stopReason: 'cancelled' })
+    await expect(prompt).resolves.toMatchObject({ stopReason: 'cancelled' })
     expect(agent.status).toBe('idle')
     expect(harness.ctx.agents.get(SessionId(sessionId))).toBeUndefined()
   })
@@ -58,7 +58,7 @@ describe('ACP connection ownership', () => {
 
     releaseRead.resolve(undefined)
     await disposal
-    await expect(prompt).resolves.toEqual({ stopReason: 'cancelled' })
+    await expect(prompt).resolves.toMatchObject({ stopReason: 'cancelled' })
     expect(harness.ctx.agents.get(SessionId(sessionId))).toBeUndefined()
   })
 

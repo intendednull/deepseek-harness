@@ -43,6 +43,7 @@ Mount the service with a backend and a confined executor; the [base bundle](../.
   config:
     mode: workspace-write                    # the deployment default every session starts from
     workspaceRoot: !!js process.cwd()        # the boundary workspace-write may write under
+    # extraWritableRoots: [/absolute/shared-cache]  # optional deployment-wide additional write roots
 - id: bash
   name: '@deepseek-ai/dsh-bash-sandbox'      # the confined executor behind ctx.shell
 ```
@@ -56,10 +57,10 @@ The mode names the file effects a command may perform; enforcement completeness 
 | Mode | Effect |
 |---|---|
 | `read-only` | Denies writes except required sinks such as `/dev/null` |
-| `workspace-write` | Allows writes under the workspace root plus a backend-defined temp area |
+| `workspace-write` | Allows writes under the workspace root, any deployment-declared extra writable roots, plus a backend-defined temp area |
 | `danger-full-access` | Bypasses confinement; the consumer spawns its original argv |
 
-Enforcement is reported per call: `full` means the backend governs every promised file effect, while `partial` means an active backend or older kernel ABI governs only a subset — the Windows ACL rung and older Landlock ABIs are the current partial cases, so a consumer that requires the absolute boundary can reject or surface them.
+Enforcement is reported per call: `full` means the backend governs every promised file effect, while `partial` means an active backend or older kernel ABI governs only a subset — the Windows ACL rung and older Landlock ABIs are the current partial cases, so a consumer that requires the absolute boundary can reject or surface them. The Windows ACL rung cannot grant extra writable roots and fails closed with `SANDBOX_UNAVAILABLE` when a `workspace-write` policy carries them.
 
 ### Denied calls and escalation
 

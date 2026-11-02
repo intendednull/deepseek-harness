@@ -334,6 +334,15 @@ export class LocalSandboxProvider extends SandboxProvider {
       })
     }
     const selected = this.selectRunner(policy.mode)
+    if (selected.runner === 'windows-acl'
+      && policy.mode === 'workspace-write'
+      && (policy.extraWritableRoots?.length ?? 0) > 0) {
+      throw new SandboxUnavailableError(
+        'workspace-write',
+        'the windows-acl backend cannot grant extraWritableRoots; remove them from the deployment policy '
+        + 'or switch that consumer to danger-full-access',
+      )
+    }
     const runnerArgv = this.runnerArgv(selected.runner, policy)
     return Promise.resolve<ConfinedArgv>({
       argv: [...runnerArgv, '--', ...argv],

@@ -4,7 +4,7 @@
  * override kit (fold + write path) every enforcing capability reads.
  */
 
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -15,7 +15,11 @@ import SandboxPolicyService, { SANDBOX_MODES, setSandboxMode } from '@deepseek-a
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt, { renderContextSnapshot, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 
-async function mounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}) {
+async function mounted(config: {
+  mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  workspaceRoot?: string
+  extraWritableRoots?: string[]
+} = {}) {
   const ctx = new Context()
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, config)
@@ -62,6 +66,115 @@ describe('SandboxPolicyService', () => {
       await expect(ctx.plugin(SandboxPolicyService, { workspaceRoot: 'relative/workspace' }))
         .rejects.toThrow('sandbox-policy: workspace root must be an absolute execution-world path')
       expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects a relative extra writable root at load', async () => {
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await expect(ctx.plugin(SandboxPolicyService, { extraWritableRoots: ['relative/cache'] }))
+        .rejects.toThrow('sandbox-policy: extra writable root must be an absolute execution-world path: relative/cache')
+      expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects a missing extra writable root at load', async () => {
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await expect(ctx.plugin(SandboxPolicyService, { extraWritableRoots: ['/does/not/exist/dsh-cache'] }))
+        .rejects.toThrow('sandbox-policy: extra writable root must be an existing directory: /does/not/exist/dsh-cache')
+      expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('rejects a non-directory extra writable root at load', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-extra-file-'))
+    const file = join(root, 'cache')
+    writeFileSync(file, 'not a directory')
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await expect(ctx.plugin(SandboxPolicyService, { extraWritableRoots: [file] }))
+        .rejects.toThrow(`sandbox-policy: extra writable root must be an existing directory: ${file}`)
+      expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats a path below a non-directory as a missing extra writable root', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-extra-enotdir-'))
+    const file = join(root, 'cache')
+    const belowFile = join(file, 'nested')
+    writeFileSync(file, 'not a directory')
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await expect(ctx.plugin(SandboxPolicyService, { extraWritableRoots: [belowFile] }))
+        .rejects.toThrow(`sandbox-policy: extra writable root must be an existing directory: ${belowFile}`)
+      expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('rethrows a stat failure that is not a missing path', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-extra-eacces-'))
+    const locked = join(root, 'locked')
+    const unreachable = join(locked, 'cache')
+    mkdirSync(locked)
+    chmodSync(locked, 0o000)
+    const ctx = new Context()
+    try {
+      await ctx.plugin(SessionProjectionRegistry)
+      await expect(ctx.plugin(SandboxPolicyService, { extraWritableRoots: [unreachable] }))
+        .rejects.toThrow(`sandbox-policy: could not inspect extra writable root: ${unreachable}`)
+      expect(ctx.get('sandboxPolicy')).toBeUndefined()
+    } finally {
+      chmodSync(locked, 0o700)
+      await ctx.fiber.dispose()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('canonicalizes and deduplicates configured extra writable roots', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-extra-roots-'))
+    const cache = join(root, 'cache')
+    mkdirSync(cache)
+    try {
+      const ctx = await mounted({
+        mode: 'workspace-write',
+        workspaceRoot: '/fallback',
+        extraWritableRoots: [cache, cache],
+      })
+      expect(ctx.sandboxPolicy.extraWritableRoots).toEqual([realpathSync.native(cache)])
+      expect(ctx.sandboxPolicy.resolve()).toEqual({
+        mode: 'workspace-write',
+        workspaceRoot: '/fallback',
+        extraWritableRoots: [realpathSync.native(cache)],
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults extra writable roots for direct construction without the schema default', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionProjectionRegistry)
+    try {
+      const service = new SandboxPolicyService(ctx, {})
+      expect(service.extraWritableRoots).toEqual([])
+      expect(service.resolve()).not.toHaveProperty('extraWritableRoots')
     } finally {
       await ctx.fiber.dispose()
     }
@@ -161,7 +274,11 @@ describe('SandboxPolicyService', () => {
 })
 
 describe('sandbox:policy request context', () => {
-  async function promptMounted(config: { mode?: 'read-only' | 'workspace-write' | 'danger-full-access'; workspaceRoot?: string } = {}): Promise<Context> {
+  async function promptMounted(config: {
+    mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+    workspaceRoot?: string
+    extraWritableRoots?: string[]
+  } = {}): Promise<Context> {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(SessionProjectionRegistry)
@@ -179,6 +296,21 @@ describe('sandbox:policy request context', () => {
     } as const
 
     expect(await policyContext(ctx, session(`sess-${mode}`, '/projects/../projects/current'))).toBe(expected[mode])
+  })
+
+  it('lists deployment-declared extra writable roots in the workspace-write context', async () => {
+    const cache = mkdtempSync(join(tmpdir(), 'dsh-extra-context-'))
+    try {
+      const ctx = await promptMounted({
+        mode: 'workspace-write',
+        workspaceRoot: '/fallback',
+        extraWritableRoots: [cache],
+      })
+      const text = await policyContext(ctx, session('sess-extras', '/projects/current'))
+      expect(text).toContain(`Additional writable roots: ${JSON.stringify([realpathSync.native(cache)])}.`)
+    } finally {
+      rmSync(cache, { recursive: true, force: true })
+    }
   })
 
   it('keeps the complete rendered prompt byte-stable across TMPDIR changes', async () => {

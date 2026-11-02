@@ -20,11 +20,13 @@
  * @module @deepseek-ai/dsh-sandbox-policy
  */
 
+import { statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { z as zod } from 'zod'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent'
+import { canonicalPath } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
@@ -38,13 +40,43 @@ function resolveWorkspaceRoot(path: string): string {
   return path
 }
 
+/**
+ * Validate and canonicalize deployment-declared extra writable roots.
+ * @param roots - configured roots, each absolute and an existing directory.
+ * @returns the canonical, deduplicated roots.
+ * @throws when a root is relative, missing, not a directory, or cannot be inspected.
+ */
+function resolveExtraWritableRoots(roots: readonly string[]): string[] {
+  return [...new Set(roots.map((root) => {
+    if (!isAbsolute(root)) {
+      throw new Error(`sandbox-policy: extra writable root must be an absolute execution-world path: ${root}`)
+    }
+    let isDirectory = false
+    try {
+      isDirectory = statSync(root).isDirectory()
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw new Error(`sandbox-policy: could not inspect extra writable root: ${root}`, { cause: error })
+      }
+    }
+    if (!isDirectory) {
+      throw new Error(`sandbox-policy: extra writable root must be an existing directory: ${root}`)
+    }
+    return canonicalPath(root)
+  }))]
+}
+
 /** Render the policy without claiming which capabilities are mounted. */
 function renderPolicyContext(policy: SandboxExecutionPolicy): string {
   switch (policy.mode) {
     case 'read-only':
       return 'Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.'
-    case 'workspace-write':
-      return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`
+    case 'workspace-write': {
+      const extras = policy.extraWritableRoots ?? []
+      const extraText = extras.length === 0 ? '' : ` Additional writable roots: ${JSON.stringify(extras)}.`
+      return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}.${extraText} Some platform temporary areas may also be writable.`
+    }
     case 'danger-full-access':
       return 'Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations.'
     /* v8 ignore next 4 -- SandboxMode is a typed same-process closed union; this branch is only the static exhaustiveness guard. */
@@ -76,6 +108,13 @@ export interface Config {
    * `process.cwd()`). Normal agent calls use their session cwd instead.
    */
   workspaceRoot?: string
+  /**
+   * Absolute, existing directories `workspace-write` may also write under, for
+   * shared build caches and similar deployment stores (default: none). Each
+   * entry is canonicalized at load; a relative or missing path fails the load.
+   * These roots apply only under `workspace-write`; `read-only` ignores them.
+   */
+  extraWritableRoots?: string[]
 }
 
 /** Inputs that select the sandbox policy for one capability call. */
@@ -114,6 +153,7 @@ export class SandboxPolicyService extends Service {
     // No schema default: process.cwd() is resolved in the constructor so the
     // stored root is always absolute regardless of how it was supplied.
     workspaceRoot: z.string(),
+    extraWritableRoots: z.array(z.string()).default([]),
   })
 
   static inject = ['sessionProjections']
@@ -122,6 +162,8 @@ export class SandboxPolicyService extends Service {
   readonly defaultMode: SandboxMode
   /** The absolute `workspace-write` fallback root for calls without a session cwd. */
   readonly workspaceRoot: string
+  /** The canonical extra `workspace-write` roots declared by the deployment. */
+  readonly extraWritableRoots: string[]
   constructor(ctx: Context, config: Config) {
     super(ctx, 'sandboxPolicy')
     // schemastery (static Config) already filled `mode`; the cast records that
@@ -129,6 +171,7 @@ export class SandboxPolicyService extends Service {
     // the process cwd is real branching, resolved absolute either way.
     this.defaultMode = config.mode as SandboxMode
     this.workspaceRoot = resolveWorkspaceRoot(config.workspaceRoot ?? process.cwd())
+    this.extraWritableRoots = resolveExtraWritableRoots(config.extraWritableRoots ?? [])
 
     ctx.sessionProjections.register({
       key: 'sandboxMode',
@@ -157,15 +200,17 @@ export class SandboxPolicyService extends Service {
    * mode outranks the session's last `sandbox/mode` event, which outranks the
    * deployment default. A session cwd is its workspace-write boundary; the
    * configured root is the fallback for agentless calls and sessions without a
-   * cwd.
+   * cwd. Deployment-declared extra writable roots travel with every resolution
+   * and are omitted from the result when none are configured.
    * @param request - optional session and approved mode override.
-   * @returns the fully resolved per-call mode and absolute workspace root.
+   * @returns the fully resolved per-call mode, absolute workspace root, and any extra writable roots.
    */
   resolve(request: SandboxPolicyRequest = {}): SandboxExecutionPolicy {
     const { session } = request
     return {
       mode: request.mode ?? (session === undefined ? undefined : this.overrideOf(session)) ?? this.defaultMode,
       workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot),
+      ...this.extraWritableRoots.length === 0 ? {} : { extraWritableRoots: this.extraWritableRoots },
       ...session === undefined ? {} : { sessionId: session.id },
     }
   }

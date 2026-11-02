@@ -43,6 +43,7 @@ kind: "package-reference"
   config:
     mode: workspace-write                    # the deployment default every session starts from
     workspaceRoot: !!js process.cwd()        # the boundary workspace-write may write under
+    # extraWritableRoots: [/absolute/shared-cache]  # optional deployment-wide additional write roots
 - id: bash
   name: '@deepseek-ai/dsh-bash-sandbox'      # the confined executor behind ctx.shell
 ```
@@ -56,10 +57,10 @@ kind: "package-reference"
 | 模式 | 效果 |
 |---|---|
 | `read-only` | 拒绝写入，必需 sink（如 `/dev/null`）除外 |
-| `workspace-write` | 允许写入工作区根目录及后端定义的临时区域 |
+| `workspace-write` | 允许写入工作区根目录、部署声明的额外可写根目录及后端定义的临时区域 |
 | `danger-full-access` | 绕过隔离；消费方直接 spawn 原始 argv |
 
-强制执行逐调用报告：`full` 表示后端管辖模式承诺的每个文件操作，`partial` 表示活动后端或较旧的内核 ABI 只管辖子集——Windows ACL 档与较旧的 Landlock ABI 是当前的部分强制执行情形，需要绝对边界的消费方可以拒绝或向上暴露它们。
+强制执行逐调用报告：`full` 表示后端管辖模式承诺的每个文件操作，`partial` 表示活动后端或较旧的内核 ABI 只管辖子集——Windows ACL 档与较旧的 Landlock ABI 是当前的部分强制执行情形，需要绝对边界的消费方可以拒绝或向上暴露它们。Windows ACL 档无法授予额外可写根目录；当 `workspace-write` 策略携带它们时，会以 `SANDBOX_UNAVAILABLE` 故障关闭。
 
 ### 被拒绝的调用与升权
 

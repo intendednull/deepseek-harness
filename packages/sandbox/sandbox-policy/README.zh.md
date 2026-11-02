@@ -40,12 +40,17 @@ kind: "package-reference"
   config:
     mode: workspace-write
     workspaceRoot: /absolute/path/to/workspace
+    extraWritableRoots:
+      - /absolute/path/to/shared-cache
 ```
 
 | 字段 | 默认值 | 含义 |
 |---|---|---|
 | `mode` | `read-only` | 会话起始的部署默认模式，加载时验证 |
 | `workspaceRoot` | `process.cwd()` | 无 agent 调用或没有 cwd 的会话所用的绝对回退根目录；相对值在加载时拒绝。普通 agent 调用使用会话的不可变 cwd |
+| `extraWritableRoots` | `[]` | `workspace-write` 还可写入的绝对且已存在目录，用于共享构建缓存；相对路径或缺失路径在加载时拒绝，`read-only` 会忽略它们 |
+
+部署声明的额外根目录在加载时规范化，并随每次解析出的策略传递，但只有 `workspace-write` 会使用它们：该模式的可写边界变为工作区根目录加上这些根目录。它们属于整个部署，因此本进程中的每个会话与每个受限消费者都获得相同的额外根目录；会话不能添加或收窄它们。无法授予这些目录的后端会故障关闭，而不会以更窄的边界运行。
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-sandbox-policy)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -143,7 +148,7 @@ Current DSH file policy: danger-full-access. The DSH file sandbox does not restr
 
 这些限制界定了本包提供的策略范围。它们是当前的包级约束，并非通用沙箱对比，也不是待办事项清单。
 
-- **每个会话只有一个主要工作区根目录**——策略解析 `SessionHeader.cwd`；额外可写根目录不属于 `SandboxExecutionPolicy`。
+- **额外可写根目录属于整个部署**——`extraWritableRoots` 适用于该部署中的每次 `workspace-write` 调用；会话不能添加或收窄它们，`read-only` 会忽略它们，无法授予它们的后端会故障关闭。
 - **仅限文件操作模式**——`SandboxMode` 管控文件操作；网络和进程策略不在其词汇中，因此这里没有限制它们的旋钮。
 - **有意概述临时区域**——强制执行后端会授予不同的平台临时区域，这些区域在策略解析后才会选定，因此无法在当前上下文中如实枚举。
 

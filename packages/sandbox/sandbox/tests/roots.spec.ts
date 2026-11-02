@@ -43,4 +43,19 @@ describe('writableRoots', () => {
     // Deduplicated after canonicalization (/tmp and os.tmpdir() may coincide).
     expect(new Set(writable).size).toBe(writable.length)
   })
+
+  it('workspace-write includes deployment-declared extra roots', () => {
+    const ws = mkdtempSync(join(tmpdir(), 'dsh-ws-'))
+    const cache = mkdtempSync(join(tmpdir(), 'dsh-cache-'))
+    roots.push(ws, cache)
+    const writable = writableRoots({ mode: 'workspace-write', workspaceRoot: ws, extraWritableRoots: [cache] })
+    expect(writable).toContain(realpathSync.native(cache))
+  })
+
+  it('read-only ignores extra writable roots', () => {
+    const cache = mkdtempSync(join(tmpdir(), 'dsh-cache-'))
+    roots.push(cache)
+    expect(writableRoots({ mode: 'read-only', workspaceRoot: process.cwd(), extraWritableRoots: [cache] }))
+      .toEqual([])
+  })
 })

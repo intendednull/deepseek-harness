@@ -40,12 +40,17 @@ Load the package with a default mode; the fail-safe default is `read-only`, and 
   config:
     mode: workspace-write
     workspaceRoot: /absolute/path/to/workspace
+    extraWritableRoots:
+      - /absolute/path/to/shared-cache
 ```
 
 | Field | Default | Meaning |
 |---|---|---|
 | `mode` | `read-only` | The deployment default mode a session starts from, validated at load |
 | `workspaceRoot` | `process.cwd()` | Absolute fallback root for agentless calls or sessions without a cwd; relative values fail at load. Normal agent calls use the session's immutable cwd |
+| `extraWritableRoots` | `[]` | Absolute, existing directories `workspace-write` may also write under, for shared build caches; relative or missing paths fail at load, and `read-only` ignores them |
+
+Deployment-declared extra roots are canonicalized at load and travel with every resolved policy, but only `workspace-write` consumes them: the mode's writable boundary becomes the workspace root plus those roots. They are deployment-wide, so every session and every confined consumer in this process gets the same extra roots; a session cannot add or narrow them. A backend that cannot grant them fails closed instead of running with a narrower boundary.
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-sandbox-policy) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -143,7 +148,7 @@ The stable system prompt remains byte-identical across mode changes. A changed f
 
 These limits define the policy surface this package provides. They are current package constraints, not a general sandbox comparison or a task backlog.
 
-- **One primary workspace root per session** — policy resolves `SessionHeader.cwd`; extra writable roots are not part of `SandboxExecutionPolicy`.
+- **Extra writable roots are deployment-wide** — `extraWritableRoots` applies to every `workspace-write` call in the deployment; a session cannot add or narrow them, `read-only` ignores them, and a backend that cannot grant them fails closed.
 - **File-effect modes only** — `SandboxMode` governs file effects; network and process policy are outside its vocabulary, so no knob here restricts them.
 - **Temporary areas are deliberately summarized** — enforcing backends grant different platform temporary areas, which are selected after policy resolution and therefore cannot be enumerated truthfully in the current context.
 

@@ -84,6 +84,13 @@ describe('profile dialects', () => {
     ])
   })
 
+  it('bwrap workspace-write: binds each extra writable root after the ephemeral /tmp', () => {
+    expect(bwrapProfileArgs({ ...WW, extraWritableRoots: ['/cache'] })).toEqual([
+      '--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent',
+      '--tmpfs', '/tmp', '--bind', '/cache', '/cache', '--bind', '/ws', '/ws',
+    ])
+  })
+
   it('landlock read-only: readable tree plus a writable /dev/null, nothing else', () => {
     // /dev/null specifically, NOT /dev: a whole-/dev grant would let confined
     // commands write real host paths beneath it (/dev/shm) under read-only.
@@ -92,6 +99,11 @@ describe('profile dialects', () => {
 
   it('landlock workspace-write: adds the host /tmp and the workspace root', () => {
     expect(landlockProfileArgs(WW)).toEqual(['--ro', '/', '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws'])
+  })
+
+  it('landlock workspace-write: grants each extra writable root', () => {
+    expect(landlockProfileArgs({ ...WW, extraWritableRoots: ['/cache'] }))
+      .toEqual(['--ro', '/', '--rw', '/dev/null', '--rw', '/tmp', '--rw', '/ws', '--rw', '/cache'])
   })
 
   it('seatbelt read-only: allow-default with every file write denied except the /dev/null literal', () => {
@@ -114,6 +126,13 @@ describe('profile dialects', () => {
     const grant = `(subpath "${realpathSync(tmpdir())}")`
     expect(profile).toContain(grant)
     expect(profile.split(grant)).toHaveLength(2)
+  })
+
+  it('seatbelt workspace-write grants extra writable roots through the shared canonical allow-list', () => {
+    const cache = mkdtempSync(join(tmpdir(), 'dsh-seatbelt-extra-'))
+    tempDirs.push(cache)
+    const profile = seatbeltProfileArgs({ ...WW, extraWritableRoots: [cache] })[1] as string
+    expect(profile).toContain(`(subpath "${realpathSync(cache)}")`)
   })
 })
 
@@ -488,5 +507,23 @@ describe('the windows-acl probe (runner invocation contract)', () => {
     })
     const confined = await sandbox.confine(['true'], RO)
     expect(confined.argv.slice(0, 2)).toEqual([process.execPath, builtEntry])
+  })
+
+  it('rejects extra writable roots under workspace-write before building the runner argv', async () => {
+    const { sandbox } = await setup({}, {
+      chain: ['windows-acl'],
+      windowsAclRunnerArgs: ['node', 'windows-acl-runner.js'],
+    })
+    await expect(sandbox.confine(['true'], { ...WW, extraWritableRoots: ['/cache'] }))
+      .rejects.toThrow(/windows-acl backend cannot grant extraWritableRoots/)
+  })
+
+  it('ignores extra writable roots under read-only', async () => {
+    const { sandbox } = await setup({}, {
+      chain: ['windows-acl'],
+      windowsAclRunnerArgs: ['node', 'windows-acl-runner.js'],
+    })
+    const confined = await sandbox.confine(['true'], { ...RO, extraWritableRoots: ['/cache'] })
+    expect(confined.argv.slice(-4)).toEqual(['--mode', 'read-only', '--', 'true'])
   })
 })

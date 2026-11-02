@@ -41,6 +41,8 @@ kind: "package-reference"
 
 只有确认项目根标记不存在时，项目根发现才会继续上溯。权限或 I/O 失败会停止发现，并抛出宿主或文件系统提供方的原始错误，而不会选择祖先项目。[历史根标记元数据决策](../../../.agents/notes/archived/bug-fix/2026-09-03-root-marker-metadata-failures.md)说明发现为何必须失败，而不能替换为其他根目录。
 
+由 touch 驱动的嵌套发现从 cwd 走向被触碰文件所在目录。启用 `stopAtNestedProjectRoots` 时，发现会在遇到第一个包含任一 `projectRootMarkers` 条目的后代目录之前停止，因此嵌套检出（例如另一个仓库或 worktree）不会从该目录及其下级贡献任何指令；同一链中更浅的目录仍会加载。从项目根到 cwd 的基线发现保持不变。
+
 ```yaml
 - name: '@deepseek-ai/dsh-agent-instructions'
   config:
@@ -56,6 +58,7 @@ export interface Config {
   maxSourceBytes?: number
   instructionFileCandidates?: string[]
   localInstructionFileCandidates?: string[]
+  stopAtNestedProjectRoots?: boolean
 }
 ```
 
@@ -66,6 +69,7 @@ export interface Config {
 | `projectRootMarkers` | `['.git']` | 标记项目根目录的目录名 |
 | `instructionFileCandidates` | `['AGENTS.md', 'CLAUDE.md']` | 每个项目目录中加载的基础文件名 |
 | `localInstructionFileCandidates` | `['AGENTS.local.md', 'CLAUDE.local.md']` | 在基础文件之后加载的本地 overlay 文件名 |
+| `stopAtNestedProjectRoots` | `false` | 在包含项目根标记的后代目录之前停止由 touch 驱动的嵌套发现 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-agent-instructions)是每个受支持字段及其 JSDoc 的穷尽式真源。
 
@@ -218,6 +222,7 @@ The previously loaded instructions from this file no longer apply.
 
 - **发现跟随结构化 fs 工具，而非 shell 导航**：更改目录的 `bash` 命令不会触发嵌套指令发现，因为 shell 语法与每次调用的 shell 状态不是可靠的文件系统 seam。
 - **刷新由 touch 驱动**：没有 watcher；外部编辑会在下一次成功的第一方 `read`、`write` 或 `edit` 时、恢复对账可见基线时，或进入步骤的 pre-step 恢复被遮蔽基线时可见。
+- **嵌套项目选项不会撤回已可见的 scope**：`stopAtNestedProjectRoots` 只约束新的 touch 驱动发现；会话中已可见的指令 scope（包括在该设置生效前从嵌套项目加载的 scope）会在该会话内继续对账，且不会由单独的移除流程清除。
 - **候选语义有意保持简单**：不解释小写名称、`.claude/rules/` 与 `@path` import；项目 scope 默认加载 `AGENTS.local.md`／`CLAUDE.local.md` overlay，但两个用户全局根目录都没有本地 overlay，其他自定义名称需要显式候选配置。与用户全局 scope 目录同名的项目目录会渲染为 `./<name>/...`，从而保留自己的 scope，而不会解析到全局根目录。
 - **去重在同一候选组内基于内容**：候选只有在去除首尾空白后字节完全一致时才折叠。两个用户全局根目录共享同一个组，因此共享根文件会折叠在内容一致的 harness home 文件之后；同级项目候选同样折叠，而从 `AGENTS.md` 漂移的独立副本则会与它一起完整加载。预算保留内容的重复候选仍参与对账：保留的候选一旦改变或消失，它就会重新可见。未改变的隐藏重复项（包括因重复而从可见状态移除的文件）使用缓存元数据，不重新读取内容。
 - **同一候选组共享失败命运**：组内任一候选（包括隐藏的重复项）的元数据或内容无法读取时，整个组在该轮保留最后一次成功状态。因此共享 agents 根目录不可读时，harness home 的变更通知也会推迟到之后某一轮同时观测到两个根目录时。

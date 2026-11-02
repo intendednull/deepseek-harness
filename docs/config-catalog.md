@@ -81,6 +81,13 @@ export interface Config {
    * under the same per-directory trimmed-content dedup; empty disables the overlay.
    */
   localInstructionFileCandidates?: string[]
+  /**
+   * Stop touch-driven nested discovery before a descendant directory that holds
+   * any `projectRootMarkers` entry, so files below a nested project such as
+   * another git repository or worktree contribute no instructions. Baseline
+   * discovery from the project root to the cwd is unchanged.
+   */
+  stopAtNestedProjectRoots?: boolean
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-agent-instructions -->

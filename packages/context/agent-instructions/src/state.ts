@@ -13,6 +13,7 @@ import type { ResolvedConfig } from './config.ts'
 import { instructionContentSha1, trimmedInstructionDigest } from './digest.ts'
 import {
   ancestorChain,
+  descendantDirsBeforeNestedProject,
   descendantDirsBetween,
   findProjectRoot,
   probeScopeInstruction,
@@ -300,7 +301,10 @@ export async function reconcileInstructionContext(
     else addDirScopes(scopes, directory)
   }
   for (const touchedPath of options.touchedPaths) {
-    for (const dir of descendantDirsBetween(cwd, touchedPath)) addProjectScopes(scopes, dir)
+    const touchedDirs = resolved.stopAtNestedProjectRoots
+      ? await descendantDirsBeforeNestedProject(cwd, touchedPath, resolved.projectRootMarkers, fileSystem, options.signal)
+      : descendantDirsBetween(cwd, touchedPath)
+    for (const dir of touchedDirs) addProjectScopes(scopes, dir)
   }
 
   const versions = versionStatesFor(session, versionCache)

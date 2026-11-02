@@ -1237,6 +1237,16 @@ describe('workspace context request injection', () => {
     await expect(mountAgentInstructionsPlugin(ctx, {} as AgentInstructions.Config)).rejects.toThrow(/maxBytes/)
   })
 
+  it('rejects a non-boolean stopAtNestedProjectRoots configuration', async () => {
+    const ctx = new Context()
+
+    provideWorkingDirectoryFixture(ctx)
+    await expect(mountAgentInstructionsPlugin(ctx, {
+      maxBytes: 65536,
+      stopAtNestedProjectRoots: 'yes',
+    } as never)).rejects.toThrow(/stopAtNestedProjectRoots|boolean/)
+  })
+
   it('mounts without requiring a filesystem provider', async () => {
     const ctx = new Context()
     provideWorkingDirectoryFixture(ctx)
@@ -3797,6 +3807,169 @@ describe('dynamic nested workspace context injection', () => {
     }
   })
 
+  it('skips instructions below a nested project root when stopAtNestedProjectRoots is enabled', async () => {
+    const root = await tempRepo()
+    const home = await tempRepo()
+    try {
+      await mkdir(join(root, 'other/.git'), { recursive: true })
+      await write(join(root, 'other/CLAUDE.md'), 'nested project role')
+      await write(join(root, 'other/notes/x.md'), 'note')
+      const ctx = new Context()
+      provideWorkingDirectoryFixture(ctx)
+      pinHarnessHome(home)
+      await mountFileToolsAndAgentInstructions(ctx, { maxBytes: 65536, stopAtNestedProjectRoots: true })
+      const agent = await stubAgent(root)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: ToolCallId('read-nested-project'),
+        name: 'read',
+        arguments: { file_path: join('other', 'notes', 'x.md') },
+        agent,
+      })
+
+      expect(result.isError).toBe(false)
+      await syncAgentInstructions(ctx, agent)
+      expect(agent.inbox.nextStep.filter(message => message.source.kind === 'agent-instructions')).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(root, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('still attaches instructions from a nested directory without a project marker', async () => {
+    const root = await tempRepo()
+    const home = await tempRepo()
+    try {
+      await write(join(root, 'pkg/AGENTS.md'), 'nested package rule')
+      await write(join(root, 'pkg/a.ts'), 'export {}')
+      const ctx = new Context()
+      provideWorkingDirectoryFixture(ctx)
+      pinHarnessHome(home)
+      await mountFileToolsAndAgentInstructions(ctx, { maxBytes: 65536, stopAtNestedProjectRoots: true })
+      const agent = await stubAgent(root)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: ToolCallId('read-nested-non-project'),
+        name: 'read',
+        arguments: { file_path: join('pkg', 'a.ts') },
+        agent,
+      })
+
+      expect(result.isError).toBe(false)
+      const text = blocksText(((await syncedAgentInstructions(ctx, agent))).content)
+      expect(text).toContain(`Additional instructions from: ${join('pkg', 'AGENTS.md')}`)
+      expect(text).toContain('nested package rule')
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(root, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('attaches shallower instructions and stops before a nested project root deeper in the chain', async () => {
+    const root = await tempRepo()
+    const home = await tempRepo()
+    try {
+      await write(join(root, 'a/AGENTS.md'), 'outer rule')
+      await mkdir(join(root, 'a/b/.git'), { recursive: true })
+      await write(join(root, 'a/b/CLAUDE.md'), 'inner rule')
+      await write(join(root, 'a/b/c/x.txt'), 'hello')
+      const ctx = new Context()
+      provideWorkingDirectoryFixture(ctx)
+      pinHarnessHome(home)
+      await mountFileToolsAndAgentInstructions(ctx, { maxBytes: 65536, stopAtNestedProjectRoots: true })
+      const agent = await stubAgent(root)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: ToolCallId('read-deep-nested-project'),
+        name: 'read',
+        arguments: { file_path: join('a', 'b', 'c', 'x.txt') },
+        agent,
+      })
+
+      expect(result.isError).toBe(false)
+      const context = await syncedAgentInstructions(ctx, agent)
+      const text = blocksText(context.content)
+      expect(text).toContain(`Additional instructions from: ${join('a', 'AGENTS.md')}`)
+      expect(text).toContain('outer rule')
+      expect(text).not.toContain(join('a', 'b', 'CLAUDE.md'))
+      expect(text).not.toContain('inner rule')
+      expect(context.source.kind === 'agent-instructions'
+        && context.source.changes.some(change => change.scope === sk('a/b', 'CLAUDE.md'))).toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(root, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('treats a .git file as a nested project marker', async () => {
+    const root = await tempRepo()
+    const home = await tempRepo()
+    try {
+      await write(join(root, 'wt/.git'), 'gitdir: /elsewhere/.git/worktrees/wt')
+      await write(join(root, 'wt/CLAUDE.md'), 'worktree role')
+      await write(join(root, 'wt/x.md'), 'note')
+      const ctx = new Context()
+      provideWorkingDirectoryFixture(ctx)
+      pinHarnessHome(home)
+      await mountFileToolsAndAgentInstructions(ctx, { maxBytes: 65536, stopAtNestedProjectRoots: true })
+      const agent = await stubAgent(root)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: ToolCallId('read-worktree-file'),
+        name: 'read',
+        arguments: { file_path: join('wt', 'x.md') },
+        agent,
+      })
+
+      expect(result.isError).toBe(false)
+      await syncAgentInstructions(ctx, agent)
+      expect(agent.inbox.nextStep.filter(message => message.source.kind === 'agent-instructions')).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(root, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('attaches nested project instructions when stopAtNestedProjectRoots is off', async () => {
+    const root = await tempRepo()
+    const home = await tempRepo()
+    try {
+      await mkdir(join(root, 'other/.git'), { recursive: true })
+      await write(join(root, 'other/CLAUDE.md'), 'nested project role')
+      await write(join(root, 'other/notes/x.md'), 'note')
+      const ctx = new Context()
+      provideWorkingDirectoryFixture(ctx)
+      pinHarnessHome(home)
+      await mountFileToolsAndAgentInstructions(ctx, { maxBytes: 65536 })
+      const agent = await stubAgent(root)
+
+      const result = await ctx.tools.execute({
+        signal: testToolSignal,
+        callId: ToolCallId('read-nested-project-default'),
+        name: 'read',
+        arguments: { file_path: join('other', 'notes', 'x.md') },
+        agent,
+      })
+
+      expect(result.isError).toBe(false)
+      const text = blocksText(((await syncedAgentInstructions(ctx, agent))).content)
+      expect(text).toContain(`Additional instructions from: ${join('other', 'CLAUDE.md')}`)
+      expect(text).toContain('nested project role')
+    } finally {
+      vi.unstubAllEnvs()
+      await rm(root, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('finishes a committed file-result projection after the tool signal ends', async () => {
     const root = await tempRepo()
     const home = await tempRepo()
@@ -3809,7 +3982,6 @@ describe('dynamic nested workspace context injection', () => {
       await mountFileToolsAndAgentInstructions(ctx, { maxBytes: 65536 })
       const agent = await stubAgent(root)
       const controller = new AbortController()
-
       ctx.emit('tools/result', stubToolExecution({
         signal: controller.signal,
         callId: ToolCallId('read-before-signal-end'),

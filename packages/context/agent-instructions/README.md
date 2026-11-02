@@ -41,6 +41,8 @@ The harness home holding the user-global `AGENTS.md` is process policy rather th
 
 Root discovery climbs only when a marker probe confirms that the marker is absent. A permission or I/O failure stops discovery and surfaces the host or filesystem-provider error instead of selecting an ancestor project. The [historical root-marker metadata decision](../../../.agents/notes/archived/bug-fix/2026-09-03-root-marker-metadata-failures.md) records why discovery fails instead of substituting another root.
 
+Touch-driven nested discovery walks from the cwd toward the touched file's directory. With `stopAtNestedProjectRoots`, it stops before a descendant directory that holds any `projectRootMarkers` entry, so a nested checkout such as another repository or worktree contributes no instructions from that directory or below; shallower directories in the same chain still load. Baseline discovery from the project root to the cwd is unchanged.
+
 ```yaml
 - name: '@deepseek-ai/dsh-agent-instructions'
   config:
@@ -56,6 +58,7 @@ export interface Config {
   maxSourceBytes?: number
   instructionFileCandidates?: string[]
   localInstructionFileCandidates?: string[]
+  stopAtNestedProjectRoots?: boolean
 }
 ```
 
@@ -66,6 +69,7 @@ export interface Config {
 | `projectRootMarkers` | `['.git']` | Directory names that mark the project root |
 | `instructionFileCandidates` | `['AGENTS.md', 'CLAUDE.md']` | Base file names loaded in each project directory |
 | `localInstructionFileCandidates` | `['AGENTS.local.md', 'CLAUDE.local.md']` | Local overlay file names loaded after the base files |
+| `stopAtNestedProjectRoots` | `false` | Stop touch-driven nested discovery before a descendant directory holding a project root marker |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-agent-instructions) is the exhaustive source for every accepted field and its JSDoc.
 
@@ -218,6 +222,7 @@ These limits define when instruction loading is a poor fit or needs operational 
 
 - **Discovery follows structured fs tools, not shell navigation** — a `bash` command that changes directories does not trigger nested instruction discovery because shell syntax and per-call shell state are not a reliable filesystem seam.
 - **Refresh is touch-driven** — there is no watcher; external edits become visible on the next successful first-party `read`, `write`, or `edit`, when resume reconciles a visible baseline, or when an entering pre-step restores a shadowed baseline.
+- **Nested-project opt-in does not retract visible scopes** — `stopAtNestedProjectRoots` bounds new touch-driven discovery only; instruction scopes already visible in a session, including ones loaded from a nested project before the setting took effect, keep reconciling for that session and are not removed by a separate pass.
 - **Candidate semantics stay intentionally small** — lowercase names, `.claude/rules/`, and `@path` imports are not interpreted; project scopes load `AGENTS.local.md`/`CLAUDE.local.md` overlays by default, but neither user-global root has a local overlay and other custom names require explicit candidate configuration. A project directory named like a user-global scope directory renders as `./<name>/...`, so it keeps its own scope instead of resolving to the global root.
 - **Deduplication is content-based within one candidate group** — candidates collapse only when byte-identical after trimming leading and trailing whitespace. The two user-global roots share one group, so the shared-root file collapses behind a matching harness-home file; sibling project candidates collapse the same way, while a distinct real copy that has drifted from `AGENTS.md` loads in full alongside it. A duplicate of budget-retained content stays reconciled: when the retained candidate changes or disappears, the duplicate becomes visible again. Unchanged hidden duplicates, including files removed from visible state as duplicates, use cached metadata instead of content reads.
 - **One candidate group shares failure fate** — when metadata or content cannot be read for any candidate, including a hidden duplicate, the group keeps its last-good state for that pass. An unreadable shared agents root therefore also postpones a harness-home change notice until a later pass observes both roots.

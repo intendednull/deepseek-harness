@@ -32,6 +32,13 @@ export interface Config {
    * under the same per-directory trimmed-content dedup; empty disables the overlay.
    */
   localInstructionFileCandidates?: string[]
+  /**
+   * Stop touch-driven nested discovery before a descendant directory that holds
+   * any `projectRootMarkers` entry, so files below a nested project such as
+   * another git repository or worktree contribute no instructions. Baseline
+   * discovery from the project root to the cwd is unchanged.
+   */
+  stopAtNestedProjectRoots?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -40,6 +47,7 @@ export const Config: z<Config> = z.object({
   maxSourceBytes: z.number().step(1).min(1).default(DEFAULT_MAX_SOURCE_BYTES),
   instructionFileCandidates: z.array(z.string()).default([...DEFAULT_INSTRUCTION_FILE_CANDIDATES]),
   localInstructionFileCandidates: z.array(z.string()).default([...DEFAULT_LOCAL_INSTRUCTION_FILE_CANDIDATES]),
+  stopAtNestedProjectRoots: z.boolean().default(false),
 })
 
 /** Normalized instruction discovery configuration. */
@@ -55,6 +63,8 @@ export interface ResolvedDiscoveryConfig {
 export interface ResolvedConfig extends ResolvedDiscoveryConfig {
   maxBytes: number
   maxSourceBytes: number
+  /** Whether touch-driven nested discovery stops before a nested project root. */
+  stopAtNestedProjectRoots: boolean
 }
 
 /**
@@ -96,6 +106,7 @@ export function resolveConfig(config: Config): ResolvedConfig {
     }),
     maxBytes: config.maxBytes,
     maxSourceBytes: config.maxSourceBytes ?? DEFAULT_MAX_SOURCE_BYTES,
+    stopAtNestedProjectRoots: config.stopAtNestedProjectRoots ?? false,
   }
 }
 

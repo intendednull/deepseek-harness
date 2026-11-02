@@ -283,6 +283,46 @@ export function descendantDirsBetween(root: string, touchedPath: string): string
 }
 
 /**
+ * Find descendant directories crossed between a cwd and a touched file, stopping
+ * before the first nested project root.
+ *
+ * The chain matches {@link descendantDirsBetween} but excludes a descendant
+ * directory that holds any configured project-root marker, and every directory
+ * below it. `root` itself is never probed, so a session already inside a project
+ * keeps discovering instructions between its cwd and the touched file.
+ * @param root - current working directory that bounds nested discovery.
+ * @param touchedPath - absolute path or path relative to `root`.
+ * @param markers - child names that identify a nested project root.
+ * @param fileSystem - optional provider used instead of host filesystem probes.
+ * @param signal - cancellation for provider and host probes.
+ * @returns descendant directories from shallowest through the last directory
+ * before a nested project root, or through the touched file's parent when none
+ * is nested.
+ * @throws the original marker metadata error or cancellation reason when a probe is unavailable.
+ */
+export async function descendantDirsBeforeNestedProject(
+  root: string,
+  touchedPath: string,
+  markers: readonly string[],
+  fileSystem?: FileSystem,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const bounded: string[] = []
+  for (const directory of descendantDirsBetween(root, touchedPath)) {
+    let nested = false
+    for (const marker of markers) {
+      if (await existsAsMarker(join(directory, marker), fileSystem, signal)) {
+        nested = true
+        break
+      }
+    }
+    if (nested) break
+    bounded.push(directory)
+  }
+  return bounded
+}
+
+/**
  * Convert an absolute instruction path to its project display path.
  * @param root - project root used as the display base.
  * @param path - absolute path to display.
